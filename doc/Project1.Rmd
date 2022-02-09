@@ -1,0 +1,308 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+## Introduction
+We know that the philosophical texts are usually considered hard to understand. This project is interested in:
+
+- How wordy(lengthy) it is for each school. Does lengthy sentences make the texts difficult to understand?
+- For the most wordy and difficult school, what are their main idea/topic?
+- Is there any topic that is hard to explain that needed more words?
+
+
+
+## Step 0: Environment Initialization and Raw Data Processing 
+Setup the packages, and process raw data to a data frame and show its data structure and variables.
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(tm)        #text mining
+library(wordcloud)
+library(RColorBrewer)
+library(tidytext)
+```
+
+```{r}
+
+phil_raw <- read_csv("/Users/jessicawang/Documents/1MA Statistics/Spring 2022/5243 Applied DS/Spring2022-Project1/Data/philosophy_data.csv")
+names(phil_raw);dim(phil_raw)
+head(phil_raw) 
+```
+
+## Step 1: Data Processing Continued and some base Analysis
+Calculate the number of words in each sentence. There are empty tokenized texts and some of them have just one word or two words. An example for an empty tokenization text is "V:. . . . . . . . . . . . ." or "X:. . . . . . . . . . . ." from Aristotle's Complete Works. Such texts are not considered as sentence, thus we filter out the texts that only have 0 or 1 words. Use the tokenized text to count the length of the sentences.
+
+```{r}
+#lengthy sentence for each author and their work
+phil <- phil_raw %>% 
+  dplyr::select(title,author,school,original_publication_date,sentence_lowered,sentence_length,tokenized_txt) %>%
+  mutate(word_count = str_count(tokenized_txt,"\\w+")) %>%
+  filter(word_count >= 2)
+```
+
+Calculate the mean of the number of words in the sentences for all texts. 
+```{r}
+average_cnt <- phil %>% 
+  summarise(mean = mean(word_count), median = median(word_count), sd = sd(word_count), max = max(word_count), min = min(word_count))
+average_cnt
+
+phil %>% ggplot(aes(x = word_count)) +
+  geom_histogram(aes(y=..density..), binwidth = 1) +
+  geom_vline(aes(xintercept = mean(word_count)),col='red',size=0.5)
+```
+The red vertical line in the histogram indicates the mean value of the sentence length, which is around 26 words. The histogram also shows that most of the sentence length is less than 50 words. Then consider any sentence that has more than 26 words then is considered as long sentence, and that with more than 40 words considered extremely difficult.
+
+"Studies from the American Press Institute have shown that when average sentence length is 14 words, readers understand more than 90% of what they are reading. At 43 words, comprehension drops to less than 10%".
+
+- Fairly difficult (Medium long sentence length): 21-25 words
+- Difficult (Long sentence length) : 25-30 words
+- Very Difficult (Very long sentence length) : 30-40 words
+- Extremely difficult (Extremely long sentence length) : 40+ words
+
+[reference](https://help.siteimprove.com/support/solutions/articles/80000447968-readability-why-are-long-sentences-over-20-words-#:~:text=Studies%20from%20the%20American%20Press,understand%20what%20they%20are%20reading.)
+
+```{r}
+#group by school, count number of lengthy sentences, consider one sentence with more than 26 words
+
+par1 <- 26
+par2 <- 40
+
+cnt_lengthy <- function(par,df) {
+  by_length <- df %>% 
+    group_by(school) %>%
+    summarise(total = n(), cnt = sum(ifelse(word_count > par,1,0)), proportion = round(cnt/total,3)) %>% 
+    arrange(desc(proportion))
+
+    by_length %>% ggplot(aes(x = school, y = proportion, fill = school)) +
+    geom_bar(stat = "identity") +
+    scale_y_continuous(labels=scales::percent) +
+    geom_text(aes(label = scales::percent(proportion),
+                     y= proportion), stat= "identity", vjust = -.5, size = 3) + 
+    theme(axis.text.x = element_text(angle = 45, size = 7)) +
+    ylab("The percentage of long sentences")
+  
+
+  }
+
+#school sentence length proportions that have more than 26 words 
+prop_26 <- cnt_lengthy(par1,phil)
+prop_26
+
+#school sentence length proportions that have more than 26 words 
+prop_40 <- cnt_lengthy(par2,phil)
+prop_40
+```
+From the first barchart, we found that the top schools with high percentage of long sentences with more than 26 words are:
+
+ - Capitalism
+ - Empiricism
+ - german_idealism 
+ - rationalism
+ - aristotle
+ - continental
+
+
+From the second barchart, the top schools with high percentage of long sentences with more than 50 words are:
+
+ - Empiricism
+ - capitalism
+ - german_idealism
+ - rationalism
+ - continental
+ - feminism
+
+Moreover,inspect into the philosophers who favored in writing long sentences.
+```{r}
+by_author <- phil %>% 
+    group_by(school,title,author) %>%
+    summarise(total = n(), cnt = sum(ifelse(word_count > 40,1,0)), proportion = round(cnt/total,3)) %>% 
+    arrange(desc(proportion))
+
+by_author %>% head(10)
+```
+The data shows that Descartes' Discourse On Method has the largest proportion of extremely long sentences. However, based on my limited knowledge on Philosophy and I have also asked my friends who studies philosophy, Descartes is a rather easy-reading writer, especially his Discourse On Methods is easy to understand. Thus, the sentence length may not accurately indicate the difficulty of the texts, and this is a counterexample of our first question "long sentences make the texts difficult to understand". 
+
+Based on common knowledge, the most difficult reading philosophers are Kant and Hegel. Luckily, we have Kant in our top 10 philosophers that have most proportions of extremely long sentences in their work. While Hegel and Kant both belong to german_idealism, and german_idealism are in the top 3 schools that have most proportions of long sentences, we will still take into account the result of the long sentence analysis and additionally add on to the reading difficulty analysis by Hakan Akgün.
+
+From the reading difficulty analysis by [Hakan Akgün](http://philosophydata.com/blog.html#intro), the most 6 difficult school for reading are:
+
+- Continental 
+- Communism 
+- Phenomenology 
+- Analytic
+- german_idealism 
+- rationalism
+
+## Step 2: Text Processing and wordcloud
+From the base analysis, the three most wordy and difficult reading school this project will consider are Continental, german_idealism, and rationalism. Now we use wordcloud to visualize the word frequency of all the three schools and also of each of the schools.
+```{r}
+#Create a function that takes the subset of the original tibble based on schools.
+school_sel <- function(schools){
+  phil_school <- phil %>%
+  filter(school %in% schools) 
+  return(phil_school)
+  }
+```
+
+
+```{r, error=TRUE}
+
+#Create a function about wordcloud to visualize word frequency in schools
+WordCloud <- function(sch) {
+  text <- c(sch$sentence_lowered)
+  text_df <- tibble(line = 1:length(text), text = text)
+  head(text_df)
+  
+  tidy_text <- text_df %>%
+    unnest_tokens(word, text) %>%
+    anti_join(stop_words)
+
+  # plot the 100 most common words
+  set.seed(1234) # for reproducibility 
+  wordcloud::wordcloud(words = tidy_text$word, min.freq = 1,max.words=100,random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"))
+
+}
+
+```
+
+```{r,error=TRUE}
+#Texts processing of only interested schools: Continental, german_idealism, and rationalism
+diff_schools <- c("continental","german_idealism","rationalism")
+diff_school_df <- school_sel(diff_schools)
+
+all_diff_sch_wc <- WordCloud(diff_school_df)
+all_diff_sch_wc
+
+continental_wc <- WordCloud(school_sel(c("continental")))
+continental_wc
+
+idealism_wc <- WordCloud(school_sel(c("german_idealism")))
+idealism_wc
+
+rationalism_wc <-  WordCloud(school_sel(c("rationalism")))
+rationalism_wc
+```
+
+From the wordclouds obtained above, we can recognize several frequently appeared words in these schools:
+Continental - madness, form, language, difference, nature，reason...
+German_Idealism - concept, consciousness, reason, nature, form, pure, time, unity, cognition...
+Rationalism - god,mind, body, nature, reason, motion, idea, soul,knowledge, objects
+Separately seen from these three word clouds, we found there are some key words have appeared in all three schools. For example, nature and reason. This may suggest that some ideas of these three schools are overlapping. Maybe they are trying to prove the same object with different methods and approaching some similar problems differently. With this idea bare in mind, it is reasonable to see that in the first wordcloud of all three schools, nature and reason are the most frequent words. 
+
+## Step 3: Data Analysis: Exploring TF-IDF and Topic Modeling
+
+From the first time in this tf-idf analysis, "wherefore" was determined as one of the top 10 important words in rationalism, whereas "wherefore" is an adverb meaning "for what reason" or "as a result of which". The reason may be that "wherefore" is used for a lot of times to help philosophers to connect their reason and the idea they want to convey. Since "wherefore" is not in the stop_words dataset, we filter out "wherefore". 
+```{r}
+#create a function of tf_idf 
+tidy_school <- function(df,filter_words) {
+   df %>% 
+  dplyr::select(school,sentence_lowered) %>%
+  mutate(line = row_number()) %>%
+  unnest_tokens(word,sentence_lowered) %>%
+  anti_join(stop_words) %>%
+  filter(word != filter_words)
+}
+
+
+tf_idf <- function(tidy_df) { 
+  tidy_df %>% 
+  count(school,word,sort = TRUE) %>% 
+  bind_tf_idf(word,school,n) %>%
+  group_by(school) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, tf_idf)) %>%
+  ggplot(aes(x=word,y=tf_idf,fill = school)) +
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~school,scales = "free") +
+  coord_flip()
+}
+
+tidy_diff <- tidy_school(diff_school_df,"wherefore")
+
+diff_school_tf <- tf_idf(tidy_diff)
+diff_school_tf
+```
+From tf-idf analysis, the most important words in Continental philosophy are words like freud, psychoanalysis, oedipus, capitalism, signifier, and etc. Thus, we can imagine that freud and psychoanalysis are related to human consciousness. Capitalism is more likely from Marx. Also, Nietzsche may have some important impact on Continental philosophy. For german_idealism, determinateness seems to be the most important word and it outweighs other words a lot. The rest of the words are posited, purposiveness, externity, cognize and etc. Recognition, consciousness and determinism are often argued in german_idealism. For rationalism, there are only several words I recognize, soul, fibers, saint, cartesians. For "soul", we know that Descartes Mind-body dualism is very famous, this may have some relation to that. Hence, it makes sense to see these words appear in the top 10 imporatant words list. Moreover, from these three schools, there doesn't exist overlapping in terms of top 10 important words.
+
+However, for all these three topics, there are many words I have never seen. For example, "oedipal","levinas", "prevenient", and the most important word in rationalism "vortexes" (This may also due to my limited exposure on English, which is my second language). These uncommon words may have increased the difficulty of reading the texts. 
+
+For comparison, we will take a look into the wordcloud and tf-idf of the most concise and easy-reading schools, which are aristotle, plato, and nietzsche
+```{r}
+aristotle_wc <- WordCloud(school_sel(c("aristotle")))
+aristotle_wc
+
+nietzsche_wc <- WordCloud(school_sel(c("nietzsche")))
+nietzsche_wc
+
+plato_wc <- WordCloud(school_sel(c("plato")))
+plato_wc
+
+easy_school_v <- c("aristotle", "nietzsche", "plato")
+easy_school_df <- school_sel(easy_school_v)
+
+tidy_easy <- tidy_school(easy_school_df,"")
+easy_school_tf <- tf_idf(tidy_easy)
+
+easy_school_tf
+```
+Aristotle - animals, time, body, reason, nature, motion...
+Nietzsche - thou, life, world, zarathustra, thee, christianity,god...
+Plato - Socrates, people, time, soul, gods,time, life, person, true...
+
+From the more frequently occurred words of the three "easy" schools, I found these words are more less abstract to me than those from the "difficult" schools, "form", "consciousness","pure". However, for the rest of the frequently occurred words, there is no big difference. Reason and nature also appears frequently in Aristotle's work. 
+
+For the most important words of the three easy schools, I also found there are simple words and meanwhile also contains difficult words. Thus, only from word frequency and importance, we cannot conclude that the difficult schools are arguing about a harder topic.
+
+
+Implement Topic Modeling
+```{r}
+library(stm)
+library(quanteda)
+
+dfm <- tidy_diff %>%
+  count(school,word) %>%
+  cast_dfm(school,word,n)
+
+topic_model <- stm(dfm,K = 3, init.type = "Spectral")
+summary(topic_model)
+
+td_beta <- tidy(topic_model) #what are the words that contribute to each topic
+
+td_beta %>% group_by(topic) %>%
+  top_n(10) %>%
+  ungroup %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(x=term,y=beta,fill = topic)) +
+  geom_col(show.legend = FALSE) + 
+  facet_wrap(~topic,scales = "free") +
+  coord_flip()
+```
+
+```{r}
+td_gamma <- tidy(topic_model,matrix = "gamma",
+                 document_names = rownames(dfm))
+
+ggplot(td_gamma,aes(gamma,fill=as.factor(topic))) +
+  geom_histogram(show.legend = FALSE) +
+  facet_wrap(~topic)
+```
+Gamma probability is the probability that a topic belongs to a document. We can see that one topic is strongly associated to each school. Also from the barchart above, we can see that the topics are highly associated to each school. The first topic has key words concept and consciousness, which are most likely from german_idealism. The second topic includes key words god, mind, and body, which are from rationalism, and the last topic has madness, which is a signal word that indicated it is from continental.
+
+
+## Conclusion
+From the data analysis, we have found out the top 3 difficult-reading schools with longest sentences proportions and studied their main idea and topics. During the process, I found that the length of the sentence doesn't determine the reading-difficulty of a text. Then we also introduced reading difficulty analysis from Hakan Akgün, and combine these finding, we selected the difficult schools. To find the main topic of these schools, we implemented tf-idf and topic modeling. However, with only topic modeling it is still hard to answer our third question "Is there any topic that is hard to explain that needed more words?". With some bias, I tried to explain that consciousness, psychoanalysis, and recognition as a more complicated topic than just mind, body, and etc. Nevertheless, this explanation is biased and inappropriate. To answer the third question, more analysis and thinking needed to be done. 
+
+In future analysis, I will try to reconstruct the third question, and explore more comparison between the reading difficult and reading easy schools. With more detailed analysis, we can dig into authors that are hard to read and comparing the authors that are in the same school.
+
+
+
+
